@@ -44,7 +44,7 @@ def get_start_keyboard(bot_username: str):
             [
                 InlineKeyboardButton(
                     text="➕ Kanal yoki Guruhga qo'shish", 
-                    url=f"https://t.me/{bot_username}?startchannel=true&admin=edit_messages"
+                    url=f"https://t.me/{bot_username}?startchannel=true&admin=post_messages+edit_messages"
                 )
             ],
             [
@@ -64,7 +64,8 @@ async def start_cmd(message: Message):
         "<b>Assalomu alaykum! Men kanal va guruhlarga avtomatik layk hamda reaksiyalar qo'shuvchi botman.</b>\n\n"
         "✨ <b>Imkoniyatlarim:</b>\n"
         "1️⃣ Kanalingizga yangi post joylanganda avtomatik reaksiya tugmalarini qo'shaman.\n"
-        "2️⃣ Menga ixtiyoriy <b>matn, rasm yoki video</b> yuborsangiz, ularga ham reaksiya tugmalarini qo'shib beraman. Keyin uni kanalingizga uzatishingiz (forward) mumkin!\n\n"
+        "2️⃣ Bot orqali kanalga post yuborish uchun: <code>/post @kanal_username Matn</code>\n"
+        "3️⃣ Rasm yoki video yuborib, izohiga <code>/post @kanal_username Matn</code> deb yozsangiz, kanalga reaksiyalar bilan joylayman!\n\n"
         "👇 Botni kanalingizga ulashtirish uchun quyidagi tugmani bosing:"
     )
     await message.answer(text, parse_mode="HTML", reply_markup=get_start_keyboard(bot_info.username))
@@ -74,16 +75,90 @@ async def start_cmd(message: Message):
 async def show_help(callback: CallbackQuery):
     instruction_text = (
         "📋 <b>Botni ishlatish bo'yicha yo'riqnoma:</b>\n\n"
-        "1️⃣ Botni kanal yoki guruhingizga <b>Admin</b> qilib qo me'yorida qo'shing.\n"
-        "2️⃣ Kanalingizga to'g'ridan-to'g'ri post joylasangiz, bot avtomatik reaksiya biriktiradi.\n"
-        "3️⃣ Yoki botning o'ziga rasm, video, fayl yoki matn yuboring — bot uning ostiga reaksiyalar qo'shib beradi. Siz uni guruh yoki kanalingizga forward qilishingiz mumkin!"
+        "1️⃣ Botni kanal yoki guruhingizga <b>Admin</b> qilib qo'shing va post joylash huquqini bering.\n"
+        "2️⃣ <b>Kanalga post yuborish:</b> <code>/post @kanal_username Post matni</code>\n"
+        "3️⃣ <b>Rasm/Video yuborish:</b> Rasm yoki videoga <code>/post @kanal_username Izoh</code> deb yozib yuboring.\n"
+        "4️⃣ Shunchaki botga rasm/video/matn yuborsangiz, ostiga reaksiya qo'shib beradi, uni forward qilishingiz mumkin."
     )
     await callback.message.answer(instruction_text, parse_mode="HTML")
     await callback.answer()
 
+# Bot orqali qo'shilgan kanallarga post yuborish handler'i (/post buyrug'i)
+@dp.message(Command("post"))
+async def post_to_channel(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Ushbu buyruqdan faqat admin foydalana oladi!")
+        return
+
+    # Buyruq matnini ajratib olamiz
+    caption_or_text = message.caption if message.caption else message.text
+    parts = caption_or_text.split(maxsplit=2)
+
+    if len(parts) < 2:
+        await message.answer(
+            "⚠️ <b>Xatolik!</b> Noto'g'ri format.\n\n"
+            "<b>Format:</b> <code>/post @kanal_username Post matni</code>\n"
+            "<b>Rasm/Video uchun:</b> Fayl izohiga <code>/post @kanal_username Matn</code> deb yozing.",
+            parse_mode="HTML"
+        )
+        return
+
+    target_channel = parts[1]
+    post_text = parts[2] if len(parts) > 2 else ""
+    keyboard = generate_reaction_keyboard()
+
+    try:
+        if message.photo:
+            await bot.send_photo(
+                chat_id=target_channel,
+                photo=message.photo[-1].file_id,
+                caption=post_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        elif message.video:
+            await bot.send_video(
+                chat_id=target_channel,
+                video=message.video.file_id,
+                caption=post_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        elif message.document:
+            await bot.send_document(
+                chat_id=target_channel,
+                document=message.document.file_id,
+                caption=post_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        elif post_text:
+            await bot.send_message(
+                chat_id=target_channel,
+                text=post_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("❌ Yuborish uchun matn yoki media topilmadi.")
+            return
+
+        await message.answer(f"✅ Post muvaffaqiyatli <b>{target_channel}</b> kanaliga yuborildi!", parse_mode="HTML")
+
+    except Exception as e:
+        logging.error(f"Kanalga post yuborishda xatolik: {e}")
+        await message.answer(
+            f"❌ <b>Xatolik yuz berdi:</b> {e}\n\n"
+            f"Bot <b>{target_channel}</b> kanalida administrator ekanligini va xabar joylash (Post Messages) huquqi borligini tekshiring.",
+            parse_mode="HTML"
+        )
+
 # Shaxsiy chatda botga Rasm, Video yoki Matn yuborilganda tayyor post qilib berish
 @dp.message(F.chat.type == "private")
 async def process_user_post(message: Message):
+    if message.text and message.text.startswith("/"):
+        return  # Komandalarga tegmaymiz
+
     keyboard = generate_reaction_keyboard()
     
     # Yuborilgan xabar turiga qarab qayta jo'natamiz
@@ -91,7 +166,7 @@ async def process_user_post(message: Message):
         await message.answer_photo(photo=message.photo[-1].file_id, caption=message.caption or "", reply_markup=keyboard)
     elif message.video:
         await message.answer_video(video=message.video.file_id, caption=message.caption or "", reply_markup=keyboard)
-    elif message.text and not message.text.startswith("/"):
+    elif message.text:
         await message.answer(text=message.text, reply_markup=keyboard)
     else:
         await message.copy_to(chat_id=message.chat.id, reply_markup=keyboard)
@@ -162,7 +237,8 @@ async def handle_like(callback: CallbackQuery):
 # Chat pastida ko'k menudagi komandalarni sozlash
 async def set_main_menu(bot: Bot):
     main_commands = [
-        BotCommand(command="start", description="Botni ishga tushirish va yo'riqnoma")
+        BotCommand(command="start", description="Botni ishga tushirish va yo'riqnoma"),
+        BotCommand(command="post", description="Kanalga post yuborish (/post @kanal_username Matn)")
     ]
     await bot.set_my_commands(main_commands)
 
